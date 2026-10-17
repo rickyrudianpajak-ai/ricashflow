@@ -694,6 +694,9 @@ body.scrolled .topbar .hello-sub{display:none}
 .set-amt{background:var(--glass-in,var(--surface));border:1.5px solid var(--line);border-radius:var(--r);padding:0 14px;height:50px}
 .set-amt input{font-size:16px;font-weight:600}
 .set-amt .rp{font-size:15px;margin-right:6px}
+/* transisi kembali */
+@keyframes viewBack{from{opacity:.4;transform:translateX(-26px)}to{opacity:1;transform:none}}
+body[data-dir="back"] .view{animation:viewBack .32s ease both}
 </style>
 </head>
 <body>
@@ -1147,9 +1150,19 @@ function monthSelect(id) {
   return `<button type="button" class="pill-select" data-mpick id="${id}" aria-haspopup="dialog" aria-label="Pilih periode (bisa lebih dari satu bulan)">${ic('calendar')}<span>${monthLabel(S.month)}</span>${ic('chevron-down')}</button>`;
 }
 const viewTab = () => S.view === 'acc' ? 'rek' : S.view === 'akun' ? (S.akBack === 'acc' ? 'rek' : S.akBack || 'hist') : S.view;
-function go(view) {
+/* ---------- riwayat navigasi: tombol kembali, geser ke kanan, tombol kembali Android ---------- */
+const NAVSTACK = []; let LAST = null;
+function go(view, back) {
+  if (!back && LAST && (LAST.view !== view || LAST.acc !== S.acc || LAST.ak !== S.ak)) { LAST.y = window.scrollY; NAVSTACK.push(LAST); if (NAVSTACK.length > 40) NAVSTACK.shift(); }
   S.view = view; renderShell(); render();
   window.scrollTo(0, 0);
+}
+function goBack() {
+  const prev = NAVSTACK.pop(); if (!prev) return false;
+  S.view = prev.view; S.acc = prev.acc; S.ak = prev.ak; S.akBack = prev.akBack;
+  document.body.dataset.dir = 'back'; renderShell(); render(); window.scrollTo(0, prev.y || 0);
+  setTimeout(() => { delete document.body.dataset.dir; }, 450);
+  return true;
 }
 function render() {
   const main = $('#main');
@@ -1160,6 +1173,9 @@ function render() {
   if (S.err) { main.innerHTML = `<div class="view"><div class="card"><div class="form-err">${esc(S.err)}</div><p class="muted">Periksa koneksi, lalu muat ulang.</p><button class="btn-ghost" data-act="reload">${ic('refresh-cw')} Coba lagi</button></div></div>`; return; }
   const v = { home: viewHome, hist: viewHist, budget: viewBudget, rek: viewRek, acc: viewAcc, akun: viewAkun, settings: viewSettings }[S.view];
   main.innerHTML = v();
+  LAST = { view: S.view, acc: S.acc, ak: S.ak, akBack: S.akBack };
+  const tb = main.querySelector('.topbar');
+  if (tb && NAVSTACK.length && !tb.querySelector('[data-back]')) tb.insertAdjacentHTML('afterbegin', `<button class="icon-btn" data-back aria-label="Kembali">${ic('chevron-left')}</button>`);
   drawCharts();
 }
 function skeleton() {
@@ -1596,7 +1612,7 @@ function viewAkun() {
   const bub = isInc ? 'b-in' : info.induk === 'pengeluaran' ? 'b-out' : 'b-save';
   return `<div class="view">
     <header class="topbar">
-      <button class="icon-btn" data-nav="${S.akBack || 'hist'}" aria-label="Kembali">${ic('chevron-left')}</button>
+      <button class="icon-btn" data-back="${S.akBack || 'hist'}" aria-label="Kembali">${ic('chevron-left')}</button>
       <div class="grow"><div class="hello-sub">Laporan akun</div><h1 class="page-title">${esc(pretty(S.ak))}</h1></div>
       ${monthSelect('mAk')}
     </header>
@@ -1698,7 +1714,7 @@ function viewAcc() {
   };
   return `<div class="view">
     <header class="topbar">
-      <button class="icon-btn" data-nav="rek" aria-label="Kembali ke daftar rekening">${ic('chevron-left')}</button>
+      <button class="icon-btn" data-back="rek" aria-label="Kembali">${ic('chevron-left')}</button>
       <div class="grow"><div class="hello-sub">Mutasi rekening</div><h1 class="page-title">${esc(pretty(A.name))}</h1></div>
       ${monthSelect('mAcc')}
     </header>
@@ -2484,6 +2500,30 @@ document.addEventListener('input', e => {
   if (k && SF) SF[k] = t.value;
 }, true);
 
+/* geser ke kanan = kembali; tombol kembali Android/browser */
+(function () {
+  let sx = 0, sy = 0, st = 0, track = false;
+  const hScroll = el => { for (let n = el; n && n !== document.body; n = n.parentElement) { const o = getComputedStyle(n).overflowX; if ((o === 'auto' || o === 'scroll') && n.scrollWidth > n.clientWidth + 2) return true; if (n.classList && n.classList.contains('chart')) return true; if (/^(INPUT|TEXTAREA|SELECT)$/.test(n.tagName)) return true; } return false; };
+  addEventListener('touchstart', e => {
+    if (e.touches.length !== 1 || POP || document.querySelector('.sheet.open')) { track = false; return; }
+    const t = e.touches[0]; sx = t.clientX; sy = t.clientY; st = Date.now(); track = sx <= 36 || !hScroll(e.target);
+  }, { passive: true });
+  addEventListener('touchend', e => {
+    if (!track) return; track = false;
+    const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (dx > 90 && Math.abs(dy) < Math.abs(dx) * .5 && Date.now() - st < 700) goBack();
+  }, { passive: true });
+  let inFrame = false; try { inFrame = window.self !== window.top; } catch (e) { inFrame = true; }
+  if (!inFrame && window.history && history.pushState) {
+    history.replaceState({ ricash: 0 }, ''); history.pushState({ ricash: 1 }, '');
+    addEventListener('popstate', () => {
+      if (POP) closePop();
+      else if (document.querySelector('.sheet.open')) closeSheets();
+      else if (!goBack()) { history.back(); setTimeout(() => history.pushState({ ricash: 1 }, ''), 400); return; }
+      history.pushState({ ricash: 1 }, '');
+    });
+  }
+})();
 /* ---------- popover (pilih bulan & urutan) ---------- */
 let POP = null;
 function openPop(anchor, html, kind) {
@@ -2520,6 +2560,8 @@ document.addEventListener('click', e => {
   const T = e.target;
   const oa = T.closest('[data-openakun]');
   if (oa) { e.stopImmediatePropagation(); e.preventDefault(); closePop(); closeSheets(); openAkun(oa.dataset.openakun); return; }
+  const bk = T.closest('[data-back]');
+  if (bk) { e.stopImmediatePropagation(); e.preventDefault(); closePop(); if (!goBack()) go(bk.dataset.back || 'home', true); return; }
   const sa = T.closest('[data-setadd]');
   if (sa) { e.stopImmediatePropagation(); e.preventDefault(); openSetForm(sa.dataset.setadd); return; }
   const sgp = T.closest('[data-sgrup]');
